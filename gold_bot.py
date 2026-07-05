@@ -5,21 +5,10 @@ import datetime
 import requests
 import os
 
+# GitHub Secrets에 'gold'라는 이름으로 웹훅 URL이 저장되어 있어야 합니다.
 WEBHOOK_URL = os.environ.get('gold')
 
-CONFIG = {
-    "REAL_YIELD_THRESHOLD": 1.5,
-    "SPREAD_THRESHOLD": 5.0,
-    "GS_RATIO_THRESHOLD": 80.0,
-    "INFLATION_THRESHOLD": 2.0
-}
-
-def send_discord(msg):
-    if WEBHOOK_URL:
-        requests.post(WEBHOOK_URL, json={"content": msg})
-
-
- def get_data():
+def get_data():
     end = datetime.datetime.now()
     start = end - datetime.timedelta(days=365)
     
