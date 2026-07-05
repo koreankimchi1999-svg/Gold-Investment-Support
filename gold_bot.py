@@ -1,5 +1,6 @@
 import yfinance as yf
 import pandas_datareader.data as web
+import pandas as pd
 import datetime
 import requests
 import os
@@ -17,59 +18,58 @@ def send_discord(msg):
     if WEBHOOK_URL:
         requests.post(WEBHOOK_URL, json={"content": msg})
 
-def get_ma200(ticker_symbol):
-    data = yf.Ticker(ticker_symbol).history(period="300d")
-    if data.empty: return 0
-    return data['Close'].rolling(window=200).mean().iloc[-1]
 
-def get_current_price(ticker):
-    # [수정] 데이터가 비어있으면 0을 반환하여 에러 방지
-    data = yf.Ticker(ticker).history(period="1d")
-    if data.empty: return 0
-    return data['Close'].iloc[-1]
-
-def get_fred_data(series_id):
-    try:
-        end = datetime.datetime.now()
-        start = end - datetime.timedelta(days=60)
-        return web.DataReader(series_id, 'fred', start, end).iloc[-1].values[0]
-    except:
-        return 0
-
-def check_market():
-    # 1. 데이터 수집 (Ticker를 'DX=F'로 변경)
-    dxy = get_current_price("DX=F") 
-    gold = get_current_price("GC=F")
-    silver = get_current_price("SI=F")
+ def get_data():
+    end = datetime.datetime.now()
+    start = end - datetime.timedelta(days=365)
     
-    # 2. 이동평균 및 경제지표
-    dxy_ma200 = get_ma200("DX=F")
-    gold_ma200 = get_ma200("GC=F")
-    real_yield = get_fred_data("REAINTRATREARAT10Y")
-    spread = get_fred_data("BAMLH0A0HYM2EY")
-    breakeven = get_fred_data("T10YIE")
+    # 데이터 다운로드 (금, 은, 달러인덱스)
+    tickers = ["GC=F", "SI=F", "DX-Y.NYB"]
+    df_price = yf.download(tickers, start=start, end=end)['Close']
     
-    # 3. YES/NO 판단 로직
-    r1 = "YES" if (dxy > 0 and dxy < dxy_ma200) else "NO"
-    r2 = "YES" if (gold > 0 and gold > gold_ma200) else "NO"
-    r3 = "YES" if (real_yield > 0 and real_yield < CONFIG["REAL_YIELD_THRESHOLD"]) else "NO"
-    r4 = "YES" if (gold > 0 and silver > 0 and (gold/silver) < CONFIG["GS_RATIO_THRESHOLD"]) else "NO"
-    r5 = "YES" if (spread > 0 and spread > CONFIG["SPREAD_THRESHOLD"]) else "NO"
-    r6 = "YES" if (breakeven > 0 and breakeven > CONFIG["INFLATION_THRESHOLD"]) else "NO"
+    # FRED 경제지표 (스프레드, 기대인플레이션)
+    fred_data = web.DataReader(['BAMLH0A0HYM2EY', 'T10YIE'], 'fred', start, end)
+    
+    # 병합 및 데이터 정제
+    df = df_price.join(fred_data, how='outer').ffill().dropna()
+    return df
 
-    msg = (
-        f"📊 **금 투자 전략 대시보드 ({datetime.date.today()})**\n"
-        f"------------------------------\n"
-        f"• 달러 약세 (DXY < 200MA): **{r1}** ({dxy:.2f})\n"
-        f"• 금 상승세 (Gold > 200MA): **{r2}** ({gold:.2f})\n"
-        f"• 저금리 (RealYield < {CONFIG['REAL_YIELD_THRESHOLD']}%): **{r3}** ({real_yield:.2f}%)\n"
-        f"• 저평가 (G/S Ratio < {CONFIG['GS_RATIO_THRESHOLD']}): **{r4}** ({ (gold/silver if silver>0 else 0):.2f})\n"
-        f"• 시장 위기 (Spread > {CONFIG['SPREAD_THRESHOLD']}%): **{r5}** ({spread:.2f}%)\n"
-        f"• 물가 상승 (Inflation > {CONFIG['INFLATION_THRESHOLD']}%): **{r6}** ({breakeven:.2f}%)\n"
-        f"------------------------------\n"
-        f"💡 YES 개수: {sum([r1=='YES', r2=='YES', r3=='YES', r4=='YES', r5=='YES', r6=='YES'])}/6"
-    )
-    send_discord(msg)
+def run_bot():
+    df = get_data()
+    
+    # 1. 지표 계산
+    df['Gold_MA200'] = df['GC=F'].rolling(window=200).mean()
+    
+    # 2. 5-Factor 로직
+    # Trend: 금 > MA200
+    cond_trend = (df['GC=F'] > df['Gold_MA200']).astype(int)
+    # Value: 금/은 비율 < 90
+    cond_value = ((df['GC=F'] / df['SI=F']) < 90).astype(int)
+    # Risk: Spread > 5.0
+    cond_fear = (df['BAMLH0A0HYM2EY'] > 5.0).astype(int)
+    # Inflation Momentum: 현재물가 > 60일 평균
+    cond_infl = (df['T10YIE'] > df['T10YIE'].rolling(60).mean()).astype(int)
+    # Dollar Momentum: 달러 < 200일 평균 (달러 약세)
+    cond_dxy = (df['DX-Y.NYB'] < df['DX-Y.NYB'].rolling(200).mean()).astype(int)
+    
+    # 3. 점수 및 신호 계산
+    df['Score'] = cond_value + cond_fear + cond_infl + cond_dxy
+    df['Signal'] = ((cond_trend == 1) & (df['Score'] >= 2)).astype(int)
+    
+    # 4. 노이즈 제거 (3일 확정 필터: 마지막 3일 신호가 모두 1이어야 함)
+    is_confirmed = df['Signal'].iloc[-3:].sum() == 3
+    final_signal = "YES" if is_confirmed else "NO"
+    
+    # 5. 알림 메시지 구성
+    msg = (f"🚀 **금투자 5-Factor 봇 ({datetime.date.today().strftime('%Y-%m-%d')})**\n"
+           f"• 최종 신호: **{final_signal}** (3일 확인)\n"
+           f"• 금 시세: ${df['GC=F'].iloc[-1]:.2f}\n"
+           f"• 점수(Score): {df['Score'].iloc[-1]}/4 (Trend 제외)\n"
+           f"• 상태: {'진입/보유 중' if is_confirmed else '관망/현금'}")
+    
+    if WEBHOOK_URL:
+        requests.post(WEBHOOK_URL, json={"content": msg})
+    print(msg)
 
 if __name__ == "__main__":
-    check_market()
+    run_bot()
