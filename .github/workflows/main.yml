@@ -1,7 +1,9 @@
 name: Gold Bot Daily Run
+
 on:
   schedule:
-    - cron: '0 0 * * *'
+    # 매일 한국 시간 아침 8시 30분 (UTC 23:30)에 실행하여 알림 지연 방지
+    - cron: '30 23 * * *'
   workflow_dispatch:
 
 jobs:
