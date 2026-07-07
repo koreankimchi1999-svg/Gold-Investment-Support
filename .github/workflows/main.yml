@@ -2,7 +2,7 @@ name: Gold Bot Daily Run
 
 on:
   schedule:
-    # 매일 한국 시간 아침 8시 30분 (UTC 23:30)에 실행하여 알림 지연 방지
+    # 매일 한국 시간 아침 8시 30분 (UTC 23:30)에 실행
     - cron: '30 23 * * *'
   workflow_dispatch:
 
@@ -10,9 +10,9 @@ jobs:
   run-bot:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.9'
       - name: Install dependencies
